@@ -203,24 +203,24 @@ if st.session_state.extracted_emails:
                 help="Maximum time to wait for page elements"
             )
     
-    # Custom Selectors
+    # Custom Selectors (Target Session–first; leave empty to use defaults)
     with st.expander("🎯 Custom Element Selectors (Optional)", expanded=False):
-        st.markdown("**Leave empty to use default selectors**")
+        st.markdown("**Leave empty to use default Target Session selectors**")
         
         col1, col2 = st.columns(2)
         
         with col1:
             custom_email_selector = st.text_input(
                 "Email Input Selector (CSS or XPath)",
-                placeholder='input[type="email"]',
-                help="CSS selector or XPath for email input field"
+                placeholder='//input[@type="email" and @placeholder="Your email"]',
+                help="Target Session: placeholder 'Your email', no name. Right Now has name='email'."
             )
         
         with col2:
             custom_submit_selector = st.text_input(
                 "Submit Button Selector (CSS or XPath)",
-                placeholder='//button[contains(text(), "Sign up")]',
-                help="CSS selector or XPath for submit button"
+                placeholder='//button[@aria-label="submit" and contains(., "Sign up")]',
+                help="Target Session: aria-label='submit' and visible 'Sign up' text."
             )
     
     # Automation Functions
@@ -248,6 +248,16 @@ if st.session_state.extracted_emails:
                         pass
             except Exception:
                 continue
+        return None, None, None
+
+    def find_element_by_selectors_with_wait(driver, selectors, timeout_seconds=15):
+        """Wait for element to appear using any of the selectors (polls all selectors until one matches or timeout)."""
+        end_time = time.time() + timeout_seconds
+        while time.time() < end_time:
+            result = find_element_by_selectors(driver, selectors)
+            if result[0] is not None:
+                return result
+            time.sleep(0.5)
         return None, None, None
     
     def is_driver_valid(driver):
@@ -280,7 +290,7 @@ if st.session_state.extracted_emails:
     def process_email_automation(email, url, email_selectors, submit_selectors, delay, timeout, headless, driver=None, is_first_email=False):
         """Process a single email through the automation workflow"""
         log_entry = {
-            'email': email,
+            'email' : email,
             'status': 'processing',
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'details': []
@@ -328,11 +338,13 @@ if st.session_state.extracted_emails:
                     return log_entry, driver
             
             time.sleep(2)  # Wait for page to load
-            
-            # Find email input field
+
+            # Find email input field (wait for dynamic content)
             log_entry['details'].append("🔍 Searching for email input field...")
-            email_element, used_selector, selector_type = find_element_by_selectors(driver, email_selectors)
-            
+            email_element, used_selector, selector_type = find_element_by_selectors_with_wait(
+                driver, email_selectors, timeout_seconds=min(15, timeout)
+            )
+
             if not email_element:
                 log_entry['status'] = 'failed'
                 log_entry['details'].append("❌ Email input field not found with any selector")
@@ -352,9 +364,13 @@ if st.session_state.extracted_emails:
                 log_entry['details'].append(f"❌ Failed to enter email: {str(e)}")
                 return log_entry, driver
             
-            # Find and click submit button
+            # Find and click submit button (wait for dynamic content)
             log_entry['details'].append("🔍 Searching for submit button...")
-            submit_element, used_submit_selector, submit_selector_type = find_element_by_selectors(driver, submit_selectors)
+            submit_element, used_submit_selector, submit_selector_type = find_element_by_selectors_with_wait(
+                driver, submit_selectors, timeout_seconds=min(10, timeout)
+            )
+            if not submit_element:
+                submit_element, used_submit_selector, submit_selector_type = find_element_by_selectors(driver, submit_selectors)
             
             if not submit_element:
                 log_entry['status'] = 'failed'
@@ -412,28 +428,25 @@ if st.session_state.extracted_emails:
         st.session_state.automation_running = True
         st.session_state.automation_logs = []
         
-        # Prepare selectors
+        # Target-first: Target Session has placeholder="Your email", NO name. Right Now has name="email".
+        # Never use input[name*="email"] or input[id*="email"] early—they match Right Now first.
         default_email_selectors = [
-            'input[placeholder="Your email"][type="text"]',
-            'input[type="email"]',
-            'input[placeholder*="email"]',
-            'input[placeholder*="Email"]',
-            'input[name*="email"]',
-            'input[name*="Email"]',
-            'input[id*="email"]',
-            'input[id*="Email"]',
-            'input[placeholder*="e-mail"]',
-            'input[name*="e-mail"]'
+            "//input[@type='email' and @placeholder='Your email']",   # Target Session
+            "//input[@placeholder='Your email' and @type='email']",
+            'input[type="email"][placeholder="Your email"]',
+            "//form[.//input[@placeholder='Your email']]//input[@type='email']",  # scoped by form
+            "//input[@type='email' and not(@name)]",   # fallback: Target has no name
+            "//input[@type='email']",                 # last resort
         ]
-        
+
         default_submit_selectors = [
-            "//button[contains(text(), 'Sign up for free')]",
+            "//button[@aria-label='submit' and .//p[normalize-space()='Sign up']]",  # Target Session
+            "//button[@aria-label='submit' and contains(., 'Sign up')]",
+            "//form[.//input[@placeholder='Your email']]//button[contains(., 'Sign up')]",  # scoped by form
             "//button[contains(text(), 'Sign up')]",
-            "//input[@type='submit']",
             "//button[@type='submit']",
-            "//button[contains(@class, 'submit')]",
-            "//a[contains(text(), 'Sign up')]"
         ]
+
         
         email_selectors = [custom_email_selector] + default_email_selectors if custom_email_selector else default_email_selectors
         submit_selectors = [custom_submit_selector] + default_submit_selectors if custom_submit_selector else default_submit_selectors
@@ -542,4 +555,5 @@ st.markdown(
     "<div style='text-align: center; color: gray;'>Made with Streamlit, OpenAI & Selenium</div>",
     unsafe_allow_html=True
 )
+
 
